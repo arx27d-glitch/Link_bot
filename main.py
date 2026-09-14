@@ -19,15 +19,13 @@ from aiogram.types import (
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-
 DB_PATH = os.getenv("DB_PATH", "bot.db")
 
-
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN is missing!")
+    raise ValueError("BOT_TOKEN is missing!")
 
 if OWNER_ID == 0:
-    raise ValueError("❌ OWNER_ID is missing!")
+    raise ValueError("OWNER_ID is missing!")
 
 
 # =========================================================
@@ -43,26 +41,25 @@ dp = Dispatcher()
 # =========================================================
 
 def get_db():
-
     return sqlite3.connect(DB_PATH)
 
 
 def init_db():
 
     conn = get_db()
-    cursor = conn.cursor()
+    cur = conn.cursor()
 
-    # Saved image + URL
-    cursor.execute("""
+    # Content
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS content (
             id INTEGER PRIMARY KEY,
-            photo_file_id TEXT,
-            url TEXT
+            photo_file_id TEXT NOT NULL,
+            url TEXT NOT NULL
         )
     """)
 
-    # Maximum 10 channels
-    cursor.execute("""
+    # Channels
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS channels (
             position INTEGER PRIMARY KEY,
             channel TEXT NOT NULL,
@@ -75,17 +72,17 @@ def init_db():
 
 
 # =========================================================
-# CONTENT DATABASE
+# CONTENT FUNCTIONS
 # =========================================================
 
 def save_content(photo_file_id, url):
 
     conn = get_db()
-    cursor = conn.cursor()
+    cur = conn.cursor()
 
-    cursor.execute("DELETE FROM content")
+    cur.execute("DELETE FROM content")
 
-    cursor.execute("""
+    cur.execute("""
         INSERT INTO content
         (id, photo_file_id, url)
         VALUES (1, ?, ?)
@@ -98,15 +95,15 @@ def save_content(photo_file_id, url):
 def get_content():
 
     conn = get_db()
-    cursor = conn.cursor()
+    cur = conn.cursor()
 
-    cursor.execute("""
+    cur.execute("""
         SELECT photo_file_id, url
         FROM content
         WHERE id = 1
     """)
 
-    result = cursor.fetchone()
+    result = cur.fetchone()
 
     conn.close()
 
@@ -116,24 +113,24 @@ def get_content():
 def delete_content():
 
     conn = get_db()
-    cursor = conn.cursor()
+    cur = conn.cursor()
 
-    cursor.execute("DELETE FROM content")
+    cur.execute("DELETE FROM content")
 
     conn.commit()
     conn.close()
 
 
 # =========================================================
-# CHANNEL DATABASE
+# CHANNEL FUNCTIONS
 # =========================================================
 
 def save_channel(position, channel, link):
 
     conn = get_db()
-    cursor = conn.cursor()
+    cur = conn.cursor()
 
-    cursor.execute("""
+    cur.execute("""
         INSERT OR REPLACE INTO channels
         (position, channel, link)
         VALUES (?, ?, ?)
@@ -146,15 +143,15 @@ def save_channel(position, channel, link):
 def get_channels():
 
     conn = get_db()
-    cursor = conn.cursor()
+    cur = conn.cursor()
 
-    cursor.execute("""
+    cur.execute("""
         SELECT position, channel, link
         FROM channels
         ORDER BY position ASC
     """)
 
-    result = cursor.fetchall()
+    result = cur.fetchall()
 
     conn.close()
 
@@ -164,9 +161,9 @@ def get_channels():
 def delete_channel(position):
 
     conn = get_db()
-    cursor = conn.cursor()
+    cur = conn.cursor()
 
-    cursor.execute("""
+    cur.execute("""
         DELETE FROM channels
         WHERE position = ?
     """, (position,))
@@ -212,12 +209,13 @@ def join_keyboard():
     for position, channel, link in channels:
 
         button = InlineKeyboardButton(
-            text=f"Join {position} ↗",
+            text=f"🔗 Join {position}",
             url=link
         )
 
         current_row.append(button)
 
+        # 2 buttons per row
         if len(current_row) == 2:
 
             rows.append(current_row)
@@ -240,7 +238,7 @@ def join_keyboard():
 
 
 # =========================================================
-# WELCOME TEXT
+# WELCOME
 # =========================================================
 
 def welcome_text(user):
@@ -249,9 +247,10 @@ def welcome_text(user):
 
     return (
         f"👋 <b>Hello {name}!</b>\n\n"
-        "📢 <b>Join All Channels To Continue.</b>\n\n"
-        "👇 Join all required channels and then "
-        "press <b>🔒 Claim</b>."
+        "📢 <b>Join all required channels to continue.</b>\n\n"
+        "After joining all channels, "
+        "press the button below.\n\n"
+        "🔒 <b>Then press Claim.</b>"
     )
 
 
@@ -268,39 +267,57 @@ async def check_member(user_id, channel):
             user_id=user_id
         )
 
-        if member.status in (
-            "member",
-            "administrator",
-            "creator"
-        ):
+        status = member.status
+
+        # Normal member
+        if status == "member":
             return True
 
-        # Restricted user who can still access the channel
-        if member.status == "restricted":
+        # Admin
+        if status == "administrator":
+            return True
 
-            if getattr(member, "is_member", False):
-                return True
+        # Channel owner
+        if status == "creator":
+            return True
+
+        # Restricted member
+        if status == "restricted":
+
+            return getattr(
+                member,
+                "is_member",
+                False
+            )
 
         return False
 
     except Exception as e:
 
         print(
-            f"Membership check error "
+            f"[Membership Error] "
             f"{channel}: {e}"
         )
 
         return False
 
 
+# =========================================================
+# CHECK ALL CONFIGURED CHANNELS
+# =========================================================
+
 async def check_all_channels(user_id):
 
     channels = get_channels()
 
-    # No channels configured
+    # IMPORTANT:
+    # Agar owner ne koi channel set nahi kiya
+    # to verification required nahi hai.
+
     if not channels:
         return True
 
+    # Sirf configured channels check honge.
     for position, channel, link in channels:
 
         joined = await check_member(
@@ -315,7 +332,7 @@ async def check_all_channels(user_id):
 
 
 # =========================================================
-# /START
+# START
 # =========================================================
 
 @dp.message(CommandStart())
@@ -326,7 +343,7 @@ async def start_handler(message: Message):
     if not channels:
 
         await message.answer(
-            "⚠️ <b>Bot is not configured yet.</b>\n\n"
+            "⚠️ <b>Bot is currently unavailable.</b>\n\n"
             "Please try again later.",
             parse_mode="HTML"
         )
@@ -349,11 +366,7 @@ async def set_channel_handler(message: Message):
 
     if not is_owner(message.from_user.id):
 
-        await message.answer(
-            "❌ <b>Owner Only Command.</b>",
-            parse_mode="HTML"
-        )
-
+        # Don't expose owner information
         return
 
     args = message.text.split(maxsplit=2)
@@ -362,7 +375,7 @@ async def set_channel_handler(message: Message):
 
         await message.answer(
             "❌ <b>Wrong format!</b>\n\n"
-            "Use:\n"
+            "Example:\n"
             "<code>/setchnl 1 @AR_Network</code>\n\n"
             "Or:\n"
             "<code>/setchnl 1 https://t.me/AR_Network</code>",
@@ -371,7 +384,7 @@ async def set_channel_handler(message: Message):
 
         return
 
-    # Position
+    # Channel position
     try:
 
         position = int(args[1])
@@ -384,6 +397,7 @@ async def set_channel_handler(message: Message):
 
         return
 
+    # Maximum 10
     if position < 1 or position > 10:
 
         await message.answer(
@@ -396,9 +410,9 @@ async def set_channel_handler(message: Message):
 
     value = args[2].strip()
 
-    # =============================================
+    # =====================================================
     # @USERNAME
-    # =============================================
+    # =====================================================
 
     if value.startswith("@"):
 
@@ -415,9 +429,9 @@ async def set_channel_handler(message: Message):
         channel = value
         link = f"https://t.me/{username}"
 
-    # =============================================
+    # =====================================================
     # TELEGRAM LINK
-    # =============================================
+    # =====================================================
 
     elif value.startswith("https://t.me/"):
 
@@ -430,7 +444,7 @@ async def set_channel_handler(message: Message):
         if not username:
 
             await message.answer(
-                "❌ Invalid Telegram channel link."
+                "❌ Invalid Telegram link."
             )
 
             return
@@ -442,8 +456,8 @@ async def set_channel_handler(message: Message):
 
         await message.answer(
             "❌ <b>Invalid channel.</b>\n\n"
-            "Example:\n"
-            "<code>/setchnl 1 @AR_Network</code>",
+            "Use:\n"
+            "<code>/setchnl 1 @channel</code>",
             parse_mode="HTML"
         )
 
@@ -460,8 +474,8 @@ async def set_channel_handler(message: Message):
         f"✅ <b>Channel {position} Saved!</b>\n\n"
         f"📢 Channel: <code>{channel}</code>\n"
         f"🔗 Link: {link}\n\n"
-        "This channel will now appear "
-        "in the Join list.",
+        f"Required channels currently: "
+        f"<b>{len(get_channels())}</b>",
         parse_mode="HTML"
     )
 
@@ -474,12 +488,6 @@ async def set_channel_handler(message: Message):
 async def delete_channel_handler(message: Message):
 
     if not is_owner(message.from_user.id):
-
-        await message.answer(
-            "❌ <b>Owner Only Command.</b>",
-            parse_mode="HTML"
-        )
-
         return
 
     args = message.text.split()
@@ -509,19 +517,17 @@ async def delete_channel_handler(message: Message):
     if position < 1 or position > 10:
 
         await message.answer(
-            "❌ Number must be 1-10."
+            "❌ Number must be between 1 and 10."
         )
 
         return
 
-    existing = get_channels()
+    channels = get_channels()
 
-    found = any(
-        x[0] == position
-        for x in existing
-    )
-
-    if not found:
+    if not any(
+        item[0] == position
+        for item in channels
+    ):
 
         await message.answer(
             f"⚠️ Channel {position} is not configured."
@@ -532,7 +538,9 @@ async def delete_channel_handler(message: Message):
     delete_channel(position)
 
     await message.answer(
-        f"🗑 <b>Channel {position} deleted.</b>",
+        f"🗑 <b>Channel {position} deleted.</b>\n\n"
+        f"Required channels now: "
+        f"<b>{len(get_channels())}</b>",
         parse_mode="HTML"
     )
 
@@ -558,7 +566,7 @@ async def channels_handler(message: Message):
 
         return
 
-    text = "📢 <b>Configured Channels</b>\n\n"
+    text = "📢 <b>CONFIGURED CHANNELS</b>\n\n"
 
     for position, channel, link in channels:
 
@@ -568,7 +576,10 @@ async def channels_handler(message: Message):
             f"🔗 {link}\n\n"
         )
 
-    text += "Maximum: <b>10 channels</b>"
+    text += (
+        "━━━━━━━━━━━━━━\n"
+        f"📊 Required: <b>{len(channels)}/10</b>"
+    )
 
     await message.answer(
         text,
@@ -579,29 +590,11 @@ async def channels_handler(message: Message):
 # =========================================================
 # /LINK
 # =========================================================
-#
-# METHOD 1:
-# Send image with caption:
-#
-# /link https://example.com/video
-#
-# METHOD 2:
-# Reply to an image:
-#
-# /link https://example.com/video
-#
-# =========================================================
 
 @dp.message(Command("link"))
 async def link_handler(message: Message):
 
     if not is_owner(message.from_user.id):
-
-        await message.answer(
-            "❌ <b>Owner Only Command.</b>",
-            parse_mode="HTML"
-        )
-
         return
 
     args = message.text.split(maxsplit=1)
@@ -610,8 +603,8 @@ async def link_handler(message: Message):
 
         await message.answer(
             "❌ <b>URL missing!</b>\n\n"
-            "Send image with:\n"
-            "<code>/link https://example.com/video</code>\n\n"
+            "Send an image with:\n"
+            "<code>/link https://example.com</code>\n\n"
             "Or reply to an image with the same command.",
             parse_mode="HTML"
         )
@@ -624,10 +617,9 @@ async def link_handler(message: Message):
 
         await message.answer(
             "❌ <b>Invalid URL!</b>\n\n"
-            "URL must start with:\n"
-            "<code>https://</code>\n"
-            "or\n"
-            "<code>http://</code>",
+            "URL must start with "
+            "<code>http://</code> or "
+            "<code>https://</code>.",
             parse_mode="HTML"
         )
 
@@ -636,7 +628,7 @@ async def link_handler(message: Message):
     photo_file_id = None
 
     # =====================================================
-    # CASE 1: IMAGE + CAPTION
+    # IMAGE + CAPTION
     # =====================================================
 
     if message.photo:
@@ -644,7 +636,7 @@ async def link_handler(message: Message):
         photo_file_id = message.photo[-1].file_id
 
     # =====================================================
-    # CASE 2: REPLY TO IMAGE
+    # REPLY TO IMAGE
     # =====================================================
 
     elif message.reply_to_message:
@@ -663,28 +655,26 @@ async def link_handler(message: Message):
 
         await message.answer(
             "❌ <b>Image not found!</b>\n\n"
-            "Use either:\n\n"
-            "1️⃣ Send an image with:\n"
+            "Send an image with:\n"
             "<code>/link https://example.com</code>\n\n"
-            "2️⃣ Reply to an image with:\n"
+            "OR reply to an image with:\n"
             "<code>/link https://example.com</code>",
             parse_mode="HTML"
         )
 
         return
 
-    # Save
     save_content(
         photo_file_id,
         url
     )
 
     await message.answer(
-        "✅ <b>Content Saved Successfully!</b>\n\n"
-        "🖼 Image: Saved\n"
-        "🔗 URL: Saved\n\n"
-        "Users who complete the channel "
-        "verification will receive this content.",
+        "✅ <b>CONTENT SAVED</b>\n\n"
+        "🖼 Image: ✅\n"
+        "🔗 Link: ✅\n\n"
+        "Users who complete verification "
+        "will receive this content.",
         parse_mode="HTML"
     )
 
@@ -697,12 +687,6 @@ async def link_handler(message: Message):
 async def link_clear_handler(message: Message):
 
     if not is_owner(message.from_user.id):
-
-        await message.answer(
-            "❌ <b>Owner Only Command.</b>",
-            parse_mode="HTML"
-        )
-
         return
 
     content = get_content()
@@ -710,7 +694,7 @@ async def link_clear_handler(message: Message):
     if not content:
 
         await message.answer(
-            "📭 No saved content found."
+            "📭 No saved content."
         )
 
         return
@@ -718,7 +702,7 @@ async def link_clear_handler(message: Message):
     delete_content()
 
     await message.answer(
-        "🗑 <b>Saved content deleted successfully.</b>",
+        "🗑 <b>Saved content deleted.</b>",
         parse_mode="HTML"
     )
 
@@ -738,7 +722,7 @@ async def link_info_handler(message: Message):
     if not content:
 
         await message.answer(
-            "📭 <b>No content is currently saved.</b>",
+            "📭 <b>No content saved.</b>",
             parse_mode="HTML"
         )
 
@@ -747,7 +731,7 @@ async def link_info_handler(message: Message):
     photo_id, url = content
 
     await message.answer(
-        "📦 <b>Current Content</b>\n\n"
+        "📦 <b>SAVED CONTENT</b>\n\n"
         "🖼 Image: ✅ Saved\n\n"
         f"🔗 URL:\n<code>{url}</code>",
         parse_mode="HTML"
@@ -764,7 +748,7 @@ async def claim_handler(callback: CallbackQuery):
     user = callback.from_user
 
     await callback.answer(
-        "🔍 Checking your membership..."
+        "🔍 Checking membership..."
     )
 
     channels = get_channels()
@@ -772,24 +756,30 @@ async def claim_handler(callback: CallbackQuery):
     if not channels:
 
         await callback.message.edit_text(
-            "⚠️ <b>Bot is not configured yet.</b>",
+            "⚠️ <b>Bot is currently unavailable.</b>",
             parse_mode="HTML"
         )
 
         return
 
-    # Check channels
+    # =====================================================
+    # CHECK ONLY CONFIGURED CHANNELS
+    # =====================================================
+
     verified = await check_all_channels(
         user.id
     )
+
+    # =====================================================
+    # NOT JOINED
+    # =====================================================
 
     if not verified:
 
         await callback.message.edit_text(
             "❌ <b>Verification Failed!</b>\n\n"
-            "📢 You haven't joined all required "
-            "channels yet.\n\n"
-            "Join all channels and press "
+            "Please join <b>ALL</b> required channels.\n\n"
+            "After joining them, press "
             "🔒 <b>Claim</b> again.",
             reply_markup=join_keyboard(),
             parse_mode="HTML"
@@ -807,7 +797,7 @@ async def claim_handler(callback: CallbackQuery):
 
         await callback.message.edit_text(
             "✅ <b>Verification Successful!</b>\n\n"
-            "⚠️ There is currently no content available.",
+            "⚠️ No content is currently available.",
             parse_mode="HTML"
         )
 
@@ -819,27 +809,27 @@ async def claim_handler(callback: CallbackQuery):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔗 Open Link",
+                    text="🔗 OPEN LINK",
                     url=url
                 )
             ]
         ]
     )
 
-    # Send image
+    # Send content
     await callback.message.answer_photo(
         photo=photo_file_id,
         caption=(
             "🎉 <b>Congratulations!</b>\n\n"
-            "✅ Membership verified successfully.\n\n"
-            "👇 Your content is ready.\n"
-            "Tap the button below."
+            "✅ Verification successful.\n\n"
+            "🎁 <b>Your content is ready!</b>\n\n"
+            "👇 Tap the button below."
         ),
         reply_markup=keyboard,
         parse_mode="HTML"
     )
 
-    # Change old message
+    # Update old message
     try:
 
         await callback.message.edit_text(
@@ -850,65 +840,76 @@ async def claim_handler(callback: CallbackQuery):
 
     except Exception as e:
 
-        print(f"Edit message error: {e}")
+        print(
+            f"[Edit Error] {e}"
+        )
 
 
 # =========================================================
-# OWNER HELP
+# /ADMIN
 # =========================================================
 
 @dp.message(Command("admin"))
 async def admin_handler(message: Message):
 
     if not is_owner(message.from_user.id):
-
-        await message.answer(
-            "❌ Owner only."
-        )
-
         return
 
     await message.answer(
         "👑 <b>OWNER PANEL</b>\n\n"
 
-        "📢 <b>CHANNEL COMMANDS</b>\n"
+        "📢 <b>CHANNEL MANAGEMENT</b>\n\n"
+
         "<code>/setchnl 1 @channel</code>\n"
         "<code>/setchnl 2 @channel</code>\n"
-        "... up to 10\n\n"
+        "<code>/setchnl 3 @channel</code>\n"
+        "...\n"
+        "<code>/setchnl 10 @channel</code>\n\n"
 
         "<code>/delchnl 1</code>\n"
-        "Delete channel\n\n"
+        "Delete a channel\n\n"
 
         "<code>/channels</code>\n"
-        "Show all channels\n\n"
+        "Show configured channels\n\n"
 
-        "🎁 <b>CONTENT COMMANDS</b>\n"
+        "🎁 <b>CONTENT</b>\n\n"
+
         "<code>/link URL</code>\n"
-        "Reply to/send an image\n\n"
+        "Reply/send image + URL\n\n"
 
         "<code>/linkinfo</code>\n"
-        "Show saved content\n\n"
+        "Show current content\n\n"
 
         "<code>/linkclear</code>\n"
-        "Delete saved content",
+        "Delete current content\n\n"
+
+        "━━━━━━━━━━━━━━\n"
+        "📌 <b>Dynamic Channel System</b>\n\n"
+        "1 channel set = 1 required\n"
+        "3 channels set = 3 required\n"
+        "10 channels set = 10 required",
         parse_mode="HTML"
     )
 
 
 # =========================================================
-# START BOT
+# START
 # =========================================================
 
 async def main():
 
     init_db()
 
-    print("================================")
-    print("🚀 VIRAL VIDEO STYLE BOT STARTED")
-    print("================================")
+    print("========================================")
+    print("🚀 VIRAL VIDEO LINK BOT STARTED")
+    print("========================================")
 
     await dp.start_polling(bot)
 
+
+# =========================================================
+# RUN
+# =========================================================
 
 if __name__ == "__main__":
 
